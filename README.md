@@ -12,6 +12,7 @@ Corresponding blog:
 # Reference
 
 Thanks https://github.com/mehulrastogi/Deep-Belief-Network-pytorch for coding tutorial
+
 Thanks https://www.zhihu.com/question/323747423 for ADAM algorithm tutorial
 
 
