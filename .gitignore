@@ -1,0 +1,30 @@
+# ignore vs code system file 
+*.vscode
+*.ipynb
+*.ipynb_checkpoints
+
+# ignore data folder 
+data/ 
+figures/
+utils/__pycache__/
+analyze/
+backup.nosync/
+check_gradient.py
+papersRdy/
+.DS_Store
+utils/.DS_Store
+temp/
+results/
+sim/
+__pycache__/
+paper_figs/
+grid_search.py
+debug.py
+m3_make_figs_backup.py
+
+# new folder
+fits/
+simulations/
+summaries/
+figures/
+land/ 
