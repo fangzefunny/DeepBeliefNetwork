@@ -1,9 +1,16 @@
-from math import cos
-import numpy as np 
+import sys 
 import torch
 import torch.nn as nn 
+import torchvision
+from torchvision import datasets, transforms
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm 
-import sys 
+
+import matplotlib
+import matplotlib.pyplot as plt 
+
+import math 
+import numpy as np 
 
 class RBM( nn.Module):
     '''Restricted Botlzmann Machine
@@ -23,8 +30,7 @@ class RBM( nn.Module):
         self.nH = nH
         self.k_samples = k 
         self.if_ada_k = if_ada_k
-        if if_gpu:
-            dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+        dev = 'cuda' if torch.cuda.is_available() and if_gpu else 'cpu'
         self.dev = torch.device( dev)
         self.verbose = verbose
         self._init_RBM()
@@ -37,7 +43,7 @@ class RBM( nn.Module):
         c = 0 
         '''
         self.W = torch.normal( mean=0, std=.01, 
-                    size=(self.nH,self.nV)).to(self.dev)
+                    size=(self.nV,self.nH)).to(self.dev)
         self.b = torch.zeros( size=(1,self.nV), 
                     dtype=torch.float32).to(self.dev)
         self.c = torch.zeros( size=(1,self.nH), 
@@ -51,7 +57,7 @@ class RBM( nn.Module):
         self.beta1 = beta1
         self.beta2 = beta2
         self.lr    = lr 
-        self.esp   = eps 
+        self.eps   = eps 
         self.m     = { 'W': 0, 'b':0, 'c':0}
         self.r     = { 'W': 0, 'b':0, 'c':0}
         self.l2    = 1e-4
@@ -62,7 +68,7 @@ class RBM( nn.Module):
         E(h|v) = - x @ W - c
         p(h|v) ∝ exp( -E(v|h))
         '''
-        e = - torch.mm( x, self.W.t()) - self.c
+        e = - torch.mm( x, self.W) - self.c
         p_h1v = torch.sigmoid( -e)
         return p_h1v, torch.bernoulli( p_h1v)
 
@@ -91,8 +97,8 @@ class RBM( nn.Module):
         # update history 
         self.r[ idx] = self.beta2*self.r[ idx] \
                         + ( 1. - self.beta2)*grad.pow(2)
-        d = np.sqrt( 1. - self.beta2**self.epoch) \
-                    / ( 1. - self.beta1**self.epoch)
+        d = np.sqrt( 1. - self.beta2**(self.epoch+1)) \
+                    / ( 1. - self.beta1**(self.epoch+1))
         return d * self.m[ idx] / ( np.sqrt(self.r[ idx]) + self.eps)
 
     def step( self, x, train=True, n_sample=1, lr=1e-4):
@@ -104,7 +110,7 @@ class RBM( nn.Module):
         vh_pos = torch.mm( x.t(), h)
         # Negative phase: Top-down 
         if self.if_ada_k:
-            n_sample = int( np.ceil( (self.epoch/self.n_epoch) * self.k_samples))
+            n_sample = int( np.ceil( ((self.epoch+1)/(self.n_epoch+1)) * self.k_samples))
         else: 
             n_sample = self.k_samples
         for _ in range(n_sample):
@@ -113,9 +119,10 @@ class RBM( nn.Module):
         vh_neg = torch.mm( p_v1h.t(), p_h1v_neg)
 
         ## Learning 
+        W_grad = 0
         if train:
             # △W = (v+h+ - v-h-) + l2*2*w
-            W_grad = (( vh_pos - vh_neg ) + self.l2*2*self.W
+            W_grad = (( vh_pos - vh_neg) + self.l2*2*self.W
                         ) / self.batch_size 
             b_grad = (( x - p_v1h).sum(dim=0) + self.l2*2*self.b
                         ) / self.batch_size
@@ -127,9 +134,9 @@ class RBM( nn.Module):
             self.c += lr * self.adam( c_grad, 'c')
         
         ## Computer reconstruction error 
-        err = (x - p_v1h).pow(2).mean(dim=0)
+        err = (x - p_v1h).pow(2).sum(dim=0).mean()
 
-        return err, torch.abs(err).sum()
+        return err, torch.abs(W_grad).sum()
 
     def train( self, train_data, n_epoch, batch_size):
         
@@ -138,7 +145,8 @@ class RBM( nn.Module):
         self.n_epoch = n_epoch
         
         # start training
-        for epoch in range( n_epoch):
+        for self.epoch in range( n_epoch):
+            
             n_batch = int( len(train_data))
             cost_ = torch.FloatTensor( n_batch, 1)
             grad_ = torch.FloatTensor( n_batch, 1)
@@ -147,11 +155,11 @@ class RBM( nn.Module):
             for i, (x_batch, _) in tqdm(enumerate(train_data), ascii=True,
                                 desc='RBM fitting', file=sys.stdout):
                 x_batch = x_batch.view( [-1, self.nV])
-                cost_[i-1], grad_[i-1] = self.step( x_batch, epoch, n_epoch)
+                cost_[i-1], grad_[i-1] = self.step( x_batch, True, self.epoch, n_epoch)
 
             ## Track learning 
-            if (epoch % 10 == 0) and self.verbose:
-                print( f'Epoch:{epoch}, avg_loss={cost_.mean()}, avg_grad={grad_.mean()} ')
+            if (self.epoch % 10 == 0) and self.verbose:
+                print( f'Epoch:{self.epoch}, avg_loss={cost_.mean()}, avg_grad={grad_.mean()} ')
 
 
 class DBN( nn.Module):
@@ -170,7 +178,7 @@ class DBN( nn.Module):
         super( DBN, self).__init__()
         # stack RBMs to construct DBN
         self.RBM_layers = []
-        for i in range(dims-1):
+        for i in range(len(dims)-1):
             rbm = RBM( dims[i], dims[i+1],
                         k=k, 
                         if_ada_k=if_ada_k,
@@ -237,5 +245,18 @@ class DBN( nn.Module):
             _, h = self.RBM_layers[i].to_hidden( v)
             v = h 
           
-    
+if __name__ == '__main__':
+
+    ## Load  MNIST dataset 
+    mnist_data = datasets.MNIST('../data', train=True, download=True,
+                                transform=transforms.Compose(
+                                    [ transforms.ToTensor(), transforms.Normalize( (.1307,), (.3081,))]
+                                ))
+    data = (mnist_data.data.type( torch.FloatTensor) / 255).bernoulli()
+    label = (mnist_data.targets.type( torch.FloatTensor) / 255).bernoulli()
+    dbn = DBN( [ 784, 10, 10, 20])
+
+    n_epoch = 1 
+    batch_size = 5
+    dbn.train_static( data, label, n_epoch, batch_size)
     
