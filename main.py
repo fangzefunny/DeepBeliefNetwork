@@ -1,3 +1,4 @@
+import os
 import sys 
 import torch
 import torch.nn as nn 
@@ -11,6 +12,9 @@ import matplotlib.pyplot as plt
 
 import math 
 import numpy as np 
+
+# find the current path
+path = os.path.dirname( os.path.abspath( __file__))
 
 class RBM( nn.Module):
     '''Restricted Botlzmann Machine
@@ -89,7 +93,7 @@ class RBM( nn.Module):
 
         m = β1 * m + (1 - β1) * grad
         r = β2 * r + (1 - β2) * grad ⊙ grad 
-        d = sqrt( 1 - β2 ** t) / ( 1 - β2 ** t)
+        lr = lr * m / (sqrt(r) + epsilon)
         '''
         # update momentum
         self.m[ idx] = self.beta1*self.m[ idx] \
@@ -97,9 +101,8 @@ class RBM( nn.Module):
         # update history 
         self.r[ idx] = self.beta2*self.r[ idx] \
                         + ( 1. - self.beta2)*grad.pow(2)
-        d = np.sqrt( 1. - self.beta2**(self.epoch+1)) \
-                    / ( 1. - self.beta1**(self.epoch+1))
-        return d * self.m[ idx] / ( np.sqrt(self.r[ idx]) + self.eps)
+    
+        return self.m[ idx] / ( np.sqrt(self.r[ idx]) + self.eps)
 
     def step( self, x, train=True, n_sample=1, lr=1e-4):
         '''
@@ -136,13 +139,14 @@ class RBM( nn.Module):
         ## Computer reconstruction error 
         err = (x - p_v1h).pow(2).sum(dim=0).mean()
 
-        return err, torch.abs(W_grad).sum()
+        return err, torch.norm(W_grad)
 
     def train( self, train_data, n_epoch, batch_size):
         
         ## get batch_size
         self.batch_size = batch_size
         self.n_epoch = n_epoch
+        losses = []
         
         # start training
         for self.epoch in range( n_epoch):
@@ -157,10 +161,14 @@ class RBM( nn.Module):
                 x_batch = x_batch.view( [-1, self.nV])
                 cost_[i-1], grad_[i-1] = self.step( x_batch, True, self.epoch, n_epoch)
 
-            ## Track learning 
-            if (self.epoch % 10 == 0) and self.verbose:
+            ## Track learning
+            if (self.epoch % 2 == 0) and self.verbose:
                 print( f'Epoch:{self.epoch}, avg_loss={cost_.mean()}, avg_grad={grad_.mean()} ')
 
+            # Save the loss
+            losses.append( cost_.mean().numpy())
+
+        return losses
 
 class DBN( nn.Module):
     '''Deep Belief Network
@@ -227,6 +235,7 @@ class DBN( nn.Module):
         Can be used for pre-train
         '''
         h = train_data 
+        train_hist = dict()
         for i in range(len(self.RBM_layers)):
 
             # track the training 
@@ -240,10 +249,19 @@ class DBN( nn.Module):
                         batch_size=batch_size, drop_last=True)
                         
             # train each layer 
-            self.RBM_layers[i].train( _dataloader, n_epoch, batch_size)
+            loss = self.RBM_layers[i].train( _dataloader, n_epoch, batch_size)
             v = h.view( [h.shape[0], -1]).type(torch.FloatTensor)
             _, h = self.RBM_layers[i].to_hidden( v)
             v = h 
+
+            # save for visualization
+            train_hist[f'layer{i+1}'] = loss 
+        
+        ## Save the network parameters 
+        torch.save(self.RBM_layers.state_dict(), f'{path}/checkpts/DBN_params.pkl')
+
+    def load_state( self, path):
+        self.RBM_layers.load_state_dict(torch.load(path)) 
           
 if __name__ == '__main__':
 
@@ -254,9 +272,14 @@ if __name__ == '__main__':
                                 ))
     data = (mnist_data.data.type( torch.FloatTensor) / 255).bernoulli()
     label = (mnist_data.targets.type( torch.FloatTensor) / 255).bernoulli()
-    dbn = DBN( [ 784, 10, 10, 20])
 
-    n_epoch = 1 
-    batch_size = 5
+    ## Init the model 
+    dbn = DBN( [ 784, 500, 500, 2000])
+
+    ## train the model
+    n_epoch = 20
+    batch_size = 32
     dbn.train_static( data, label, n_epoch, batch_size)
+
+    ## 
     
